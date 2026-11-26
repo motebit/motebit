@@ -22,9 +22,9 @@ import {
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
 import type { ToolCall } from "./turn-principal.js";
 import {
-  RELAY_CHANGED_RESULT,
   acknowledgementOf,
   approvalOutlivedBinding,
+  relayChangedRefusal,
   type RelayBindingSnapshot,
   type RelayBindingSource,
 } from "./relay-binding.js";
@@ -361,7 +361,7 @@ export class InteractiveDelegationManager {
     ): RelayBindingSnapshot | { ok: false; error: string } => {
       const binding = this.deps.getBinding();
       if (approvalOutlivedBinding(call?.approvedRelayGeneration, binding)) {
-        return { ...RELAY_CHANGED_RESULT };
+        return relayChangedRefusal();
       }
       if (binding == null || !binding.tools) return { ...NOT_BOUND_RESULT };
       return binding;

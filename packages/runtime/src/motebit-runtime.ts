@@ -274,6 +274,7 @@ import {
 } from "./paid-intent-ledger.js";
 import {
   acknowledgementOf,
+  relayChangedRefusal,
   relayIdentityOf,
   sameRelay,
   sameRelayIdentity,
@@ -2130,7 +2131,10 @@ export class MotebitRuntime {
     let approvedCall: ToolCall | undefined;
     if (options.humanApproved === true && this.toolRegistry.isRelayBound(name)) {
       if (!sameRelayIdentity(options.approvedUnderRelay, relayIdentityOf(this._relayBinding))) {
-        return refuseLocalCall(RELAY_CHANGED_RESULT.error);
+        // The receipt is signed `denied`; the caller gets the runtime's own
+        // marked refusal (`isRelayChangedResult`), which no handler can forge.
+        await refuseLocalCall(RELAY_CHANGED_RESULT.error);
+        return relayChangedRefusal();
       }
       approvedCall = { ...OWNER_CALL, approvedRelayGeneration: this._relayGeneration };
     }

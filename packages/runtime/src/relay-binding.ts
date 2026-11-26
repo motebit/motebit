@@ -110,13 +110,30 @@ export const RELAY_CHANGED_RESULT = {
 };
 
 /**
- * True when a tool result is the `relay_changed` refusal
- * ({@link RELAY_CHANGED_RESULT}, returned by the runtime's own checks:
- * `invokeLocalTool`, the approval resume and the delegation handlers). The
- * one structured test for it, so no caller matches free text.
+ * The refusals the runtime's own relay checks minted. Module-private: only
+ * {@link relayChangedRefusal} adds to it, so a tool handler that returns the
+ * same text (an MCP server's error passed through, say) is never mistaken
+ * for one.
  */
-export function isRelayChangedResult(result: { ok: boolean; error?: string }): boolean {
-  return result.ok === false && result.error === RELAY_CHANGED_RESULT.error;
+const MINTED_REFUSALS = new WeakSet<object>();
+
+/**
+ * A fresh `relay_changed` refusal ({@link RELAY_CHANGED_RESULT}) marked as
+ * the runtime's own. Returned by `invokeLocalTool`'s carried-approval check
+ * and by the delegation handlers' generation check.
+ */
+export function relayChangedRefusal(): { ok: false; error: string } {
+  const refusal = { ...RELAY_CHANGED_RESULT };
+  MINTED_REFUSALS.add(refusal);
+  return refusal;
+}
+
+/**
+ * True only for a refusal {@link relayChangedRefusal} minted — by object
+ * identity, never by its text. A handler cannot forge it.
+ */
+export function isRelayChangedResult(result: object): boolean {
+  return MINTED_REFUSALS.has(result);
 }
 
 /**

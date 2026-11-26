@@ -21,6 +21,7 @@ export function goalRunFakes() {
     // The relay surface the recovered-approval drain reads: no relay bound,
     // and every tool a local (not relay-bound) one.
     getRelayIdentity: () => null,
+    getDelegationRelay: () => null,
     relayBoundToolStatus: (_name: string) => "local" as const,
   };
 }

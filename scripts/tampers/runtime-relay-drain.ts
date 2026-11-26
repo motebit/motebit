@@ -17,7 +17,9 @@
  *     not refused (or given the another-relay summary), the runtime's own
  *     relay_changed refusal counted as a goal failure, `approvedUnderRelay`
  *     not passed, the check run before the goal tools are registered, and the
- *     refusal moved out of the try/finally (goal tools left registered).
+ *     refusal moved out of the try/finally (goal tools left registered); the
+ *     refusal predicate matched by text again or accepted from a tool that was
+ *     not relay-bound; and each refusal summary replaced by a false one.
  *
  *   node scripts/tampers/runtime-relay-drain.ts
  */
@@ -290,7 +292,7 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: '      if (status === "unregistered") return "relay_changed";\n',
+        from: '      if (status === "unregistered") return "tool_unregistered";\n',
         to: "",
       },
     ],
@@ -329,7 +331,7 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: '      if (status === "relay_bound") return mismatch() ? "relay_changed" : null;\n',
+        from: '      if (status === "relay_bound") return this.relayMismatchVerdict(approvedUnder);\n',
         to: "",
       },
     ],
@@ -342,8 +344,8 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: '      if (relayVerdict == null && isRelayChangedResult(result)) relayVerdict = "relay_changed";\n',
-        to: "",
+        from: '      if (relayVerdict == null && statusAtCall === "relay_bound" && isRelayChangedResult(result)) {\n',
+        to: "      if (relayVerdict == null && result.ok === ('' as unknown as boolean)) {\n",
       },
     ],
     pkg: "motebit",
@@ -355,14 +357,76 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: BINDING,
-        from: "  return result.ok === false && result.error === RELAY_CHANGED_RESULT.error;\n",
-        to: "  return result.ok === false && result.error === `${RELAY_CHANGED_RESULT.error}.`;\n",
+        from: "  return MINTED_REFUSALS.has(result);\n",
+        to: "  return MINTED_REFUSALS.has(result) && false;\n",
       },
     ],
     pkg: "motebit",
     rebuild: ["@motebit/runtime"],
     test: T_DRAIN,
     red: "the runtime's relay_changed refusal counts like the drain's own a relay_bound=false row recorded under A, restarted bound to B: not a goal failure",
+  },
+  {
+    name: "isRelayChangedResult matches the refusal by its text again",
+    edits: [
+      {
+        file: BINDING,
+        from: "  return MINTED_REFUSALS.has(result);\n",
+        to: "  const r = result as { ok?: boolean; error?: string };\n  return MINTED_REFUSALS.has(result) || (r.ok === false && r.error === RELAY_CHANGED_RESULT.error);\n",
+      },
+    ],
+    pkg: "motebit",
+    rebuild: ["@motebit/runtime"],
+    test: T_DRAIN,
+    red: "a handler's own failure is never taken for the runtime's relay refusal a relay-bound tool whose handler runs and returns the relay_changed text: a counted failure",
+  },
+  {
+    name: "the drain accepts the runtime's refusal from a tool that was not relay-bound",
+    edits: [
+      {
+        file: SCHED,
+        from: 'statusAtCall === "relay_bound" && isRelayChangedResult(result)',
+        to: "isRelayChangedResult(result)",
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: "a handler's own failure is never taken for the runtime's relay refusal a local tool whose handler passes on the runtime's own refusal: still a counted failure",
+  },
+  {
+    name: "nothing bound is reported as an unregistered tool",
+    edits: [
+      {
+        file: SCHED,
+        from: '      if (this.runtime.getDelegationRelay() == null) return "no_relay_bound";\n      if (status === "unregistered") return "tool_unregistered";\n',
+        to: '      if (status === "unregistered") return "tool_unregistered";\n',
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: "the drain says only what it knows a relay-bound row recorded under A, drained with nothing bound: no relay is bound now",
+  },
+  {
+    name: "an unregistered relay tool under the same relay is reported as another relay",
+    edits: [
+      {
+        file: SCHED,
+        from: '      if (status === "unregistered") return "tool_unregistered";\n',
+        to: '      if (status === "unregistered") return "relay_changed";\n',
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: `${DRAIN} a relay-bound row whose tool is unregistered: the drain's own relay_changed verdict`,
+  },
+  {
+    name: "a row with no recorded relay is reported as another relay",
+    edits: [
+      { file: SCHED, from: '    if (approvedUnder == null) return "unrecorded_relay";\n', to: "" },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: `${DRAIN} a null-relay row for a relay-bound tool: denied`,
   },
   {
     name: "the drain does not pass approvedUnderRelay",
@@ -400,8 +464,8 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: "      let relayVerdict: RecoveredRelayVerdict | null = null;\n      try {\n",
-        to: '      let relayVerdict: RecoveredRelayVerdict | null = null;\n      if (this.recoveredRelayVerdict(item, recoveredApprovalRelay(item)) != null) {\n        this.finishRecoveredRun(run, { ok: false, summary: "relay_changed", countAsFailure: false });\n        continue;\n      }\n      try {\n',
+        from: "      let approvedUnder: ApprovalRelayIdentity | null = null;\n      try {\n",
+        to: '      let approvedUnder: ApprovalRelayIdentity | null = null;\n      if (this.recoveredRelayVerdict(item, recoveredApprovalRelay(item)) != null) {\n        this.finishRecoveredRun(run, { ok: false, summary: "relay_changed", countAsFailure: false });\n        continue;\n      }\n      try {\n',
       },
     ],
     pkg: "motebit",

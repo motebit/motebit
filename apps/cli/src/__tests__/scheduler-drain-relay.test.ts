@@ -26,7 +26,12 @@ vi.mock("@motebit/memory-graph", async () => {
 });
 
 import { createHash } from "node:crypto";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  RELAY_CHANGED_RESULT,
+  createInMemoryStorage,
+} from "@motebit/runtime";
 import type { StreamChunk } from "@motebit/runtime";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolDefinition } from "@motebit/sdk";
@@ -309,7 +314,9 @@ describe("approval rows are stamped from the chunk", () => {
     s2.stop();
     const run = db.goalRunStore.getByApproval(row!.approval_id)!;
     expect(run.note).toContain("relay_changed");
-    expect(run.note).toContain("approved under another relay");
+    expect(run.note).toContain(
+      "was approved with no relay recorded, so it cannot be checked against the bound relay — not executed",
+    );
     expect(spy.calls()).toBe(0);
   });
 });
@@ -364,7 +371,9 @@ describe("the drain runs a relay-bound approval only under its relay", () => {
     const spy = spyOn(runtime, "delegate_to_agent");
     const note = await restart(db, runtime);
     expect(note).toContain("relay_changed");
-    expect(note).toContain("approved under another relay");
+    expect(note).toContain(
+      "was approved with no relay recorded, so it cannot be checked against the bound relay — not executed",
+    );
     expect(spy.calls()).toBe(0);
   });
 
@@ -375,7 +384,10 @@ describe("the drain runs a relay-bound approval only under its relay", () => {
     bind(runtime, RELAY_A, false);
     expect(runtime.getToolRegistry().has("delegate_to_agent")).toBe(false);
     const note = await restart(db, runtime);
-    expect(note).toContain("approved under another relay");
+    expect(note).toContain(
+      "was approved as a relay tool, but its tool is not registered under the current binding — not executed",
+    );
+    expect(note).not.toContain("approved under another relay");
     expect(note).toContain("relay_changed");
     expect(note).not.toContain("is not available");
   });
@@ -388,7 +400,9 @@ describe("the drain runs a relay-bound approval only under its relay", () => {
     const invokes = countInvokes(runtime);
     const note = await restart(db, runtime);
     expect(note).toContain("relay_changed");
-    expect(note).toContain("approved under another relay");
+    expect(note).toContain(
+      "was approved with no relay recorded, so it cannot be checked against the bound relay — not executed",
+    );
     expect(spy.calls()).toBe(0);
     expect(invokes.calls()).toBe(0);
   });
@@ -414,7 +428,9 @@ describe("the drain runs a relay-bound approval only under its relay", () => {
     const note = await restart(db, runtime);
     // The drain let it through (the row says local); the runtime refused it,
     // and the drain treats that refusal exactly like its own.
-    expect(note).toContain("approved under another relay");
+    expect(note).toContain(
+      "was approved with no relay recorded, so it cannot be checked against the bound relay — not executed",
+    );
     expect(note).toContain("relay_changed");
     expect(note).not.toContain("failed after approval");
     expect(spy.calls()).toBe(0);
@@ -431,11 +447,95 @@ describe("the runtime's relay_changed refusal counts like the drain's own", () =
     const note = await restart(db, runtime);
     expect(spy.calls()).toBe(0);
     expect(note).toContain(
-      "delegate_to_agent was approved under another relay than the one bound now — not executed: relay_changed",
+      "delegate_to_agent was approved under another relay than the one bound now — not executed (relay_changed)",
     );
     expect(note).not.toContain("failed after approval");
     expect(db.goalRunStore.get("run-1")!.status).toBe("failed");
     expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(0);
+  });
+});
+
+describe("the drain says only what it knows", () => {
+  it("a relay-bound row recorded under A, drained with nothing bound: no relay is bound now", async () => {
+    seedApproved(db, { tool: "delegate_to_agent", relay_pin_key: RELAY_A, relay_bound: true });
+    const runtime = makeRuntime();
+    const invokes = countInvokes(runtime);
+    const note = await restart(db, runtime);
+    expect(note).toContain(
+      "delegate_to_agent was approved under a relay, but no relay is bound now — not executed (relay_changed)",
+    );
+    expect(note).not.toContain("approved under another relay");
+    expect(invokes.calls()).toBe(0);
+    expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(0);
+  });
+});
+
+const LOCAL: ToolDefinition = {
+  name: "write_note",
+  mode: "api",
+  description: "Write a note on this device",
+  inputSchema: { type: "object", properties: {} },
+};
+
+describe("a handler's own failure is never taken for the runtime's relay refusal", () => {
+  it("a local tool whose handler runs and returns the relay_changed text: a counted failure", async () => {
+    seedApproved(db, {
+      tool: "write_note",
+      args: {},
+      relay_pin_key: RELAY_A,
+      relay_bound: false,
+    });
+    const runtime = makeRuntime();
+    bind(runtime, RELAY_A);
+    let calls = 0;
+    runtime.getToolRegistry().register(LOCAL, async () => {
+      calls++; // the handler ran (a side effect happened), then echoed the text
+      return { ok: false, error: RELAY_CHANGED_RESULT.error };
+    });
+    const note = await restart(db, runtime);
+    expect(calls).toBe(1);
+    expect(note).toContain("write_note failed after approval");
+    expect(note).not.toContain("not executed");
+    expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(1);
+    expect(db.goalOutcomeStore.listForGoal("goal-001", 10)[0]!.tool_calls_made).toBe(1);
+  });
+
+  it("a relay-bound tool whose handler runs and returns the relay_changed text: a counted failure", async () => {
+    seedApproved(db, { tool: "delegate_to_agent", relay_pin_key: RELAY_A, relay_bound: true });
+    const runtime = makeRuntime();
+    bind(runtime, RELAY_A);
+    const registry = runtime.getToolRegistry();
+    let calls = 0;
+    // The flag is kept across `replace`: still relay-bound, same relay.
+    registry.replace(registry.get("delegate_to_agent") as ToolDefinition, async () => {
+      calls++;
+      return { ok: false, error: RELAY_CHANGED_RESULT.error };
+    });
+    const note = await restart(db, runtime);
+    expect(calls).toBe(1);
+    expect(note).toContain("delegate_to_agent failed after approval");
+    expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(1);
+    expect(db.goalOutcomeStore.listForGoal("goal-001", 10)[0]!.tool_calls_made).toBe(1);
+  });
+
+  it("a local tool whose handler passes on the runtime's own refusal: still a counted failure", async () => {
+    seedApproved(db, { tool: "proxy_note", args: {}, relay_pin_key: RELAY_A, relay_bound: false });
+    const runtime = makeRuntime();
+    bind(runtime, RELAY_A);
+    let calls = 0;
+    runtime.getToolRegistry().register({ ...LOCAL, name: "proxy_note" }, async () => {
+      calls++;
+      // The runtime's marked refusal, from a carried approval with no relay.
+      return runtime.invokeLocalTool("delegate_to_agent", DELEGATE_ARGS, {
+        invocationOrigin: "scheduled",
+        humanApproved: true,
+      });
+    });
+    const note = await restart(db, runtime);
+    expect(calls).toBe(1);
+    expect(note).toContain("proxy_note failed after approval");
+    expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(1);
+    expect(db.goalOutcomeStore.listForGoal("goal-001", 10)[0]!.tool_calls_made).toBe(1);
   });
 });
 

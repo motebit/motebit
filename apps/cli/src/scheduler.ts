@@ -1972,15 +1972,20 @@ export class GoalScheduler {
       this.registerGoalTools();
       let result: { ok: boolean; data?: unknown; error?: string };
       let relayVerdict: RecoveredRelayVerdict | null = null;
+      // How the registry classified the tool when it was called: only a
+      // relay-bound tool's result can be the runtime's relay refusal.
+      let statusAtCall: "relay_bound" | "local" | "unregistered" = "unregistered";
+      let approvedUnder: ApprovalRelayIdentity | null = null;
       try {
         // The relay check: after the goal tools are registered (so a goal
         // tool is classified as on main), synchronously immediately before
         // the call. A refusal still unregisters them below.
-        const approvedUnder = recoveredApprovalRelay(item);
+        approvedUnder = recoveredApprovalRelay(item);
         relayVerdict = this.recoveredRelayVerdict(item, approvedUnder);
         if (relayVerdict != null) {
           result = { ...RELAY_CHANGED_RESULT };
         } else {
+          statusAtCall = this.runtime.relayBoundToolStatus(item.tool_name);
           result = await this.runtime.invokeLocalTool(item.tool_name, args, {
             invocationOrigin: "scheduled",
             humanApproved: true,
@@ -1995,17 +2000,19 @@ export class GoalScheduler {
         this.currentRunId = null;
         this.unregisterGoalTools();
       }
-      // The runtime's own relay refusal (`invokeLocalTool` or the handler:
-      // e.g. a row recorded not relay-bound whose tool is relay-bound now)
-      // is the same verdict as the drain's: nothing ran, not a goal failure.
-      if (relayVerdict == null && isRelayChangedResult(result)) relayVerdict = "relay_changed";
+      // The runtime's own relay refusal (`invokeLocalTool`'s check, or the
+      // handler's when a rebind landed during the call — e.g. a row recorded
+      // not relay-bound whose tool is relay-bound now) is the drain's verdict
+      // too: nothing was sent, not a goal failure. Both conditions: the
+      // result is the runtime's marked refusal (never matched by text — a
+      // handler can return any text), and the tool was relay-bound.
+      if (relayVerdict == null && statusAtCall === "relay_bound" && isRelayChangedResult(result)) {
+        relayVerdict = this.relayMismatchVerdict(approvedUnder) ?? "relay_changed";
+      }
       if (relayVerdict != null) {
         this.finishRecoveredRun(run, {
           ok: false,
-          summary:
-            relayVerdict === "unrecorded_unregistered"
-              ? `${item.tool_name} was approved before relay recording and its tool is not registered now, so it cannot be checked against the bound relay — not executed: ${result.error ?? "relay_changed"}`
-              : `${item.tool_name} was approved under another relay than the one bound now — not executed: ${result.error ?? "relay_changed"}`,
+          summary: `${item.tool_name} ${RECOVERED_RELAY_REFUSAL[relayVerdict]} — not executed (relay_changed)`,
           countAsFailure: false,
         });
         continue;
@@ -2041,17 +2048,31 @@ export class GoalScheduler {
     approvedUnder: ApprovalRelayIdentity | null,
   ): RecoveredRelayVerdict | null {
     const status = this.runtime.relayBoundToolStatus(item.tool_name);
-    const mismatch = (): boolean =>
-      !sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity());
     if (item.relay_bound === true) {
-      if (status === "unregistered") return "relay_changed";
-      return mismatch() ? "relay_changed" : null;
+      if (this.runtime.getDelegationRelay() == null) return "no_relay_bound";
+      if (status === "unregistered") return "tool_unregistered";
+      return this.relayMismatchVerdict(approvedUnder);
     }
     if (item.relay_bound == null) {
       if (status === "unregistered") return "unrecorded_unregistered";
-      if (status === "relay_bound") return mismatch() ? "relay_changed" : null;
+      if (status === "relay_bound") return this.relayMismatchVerdict(approvedUnder);
     }
     return null;
+  }
+
+  /**
+   * Whether the relay an approval was recorded under is the bound one: null
+   * when it is, otherwise why not — no relay recorded with the row, no relay
+   * bound now, or another relay (another pin key or pinned key).
+   */
+  private relayMismatchVerdict(
+    approvedUnder: ApprovalRelayIdentity | null,
+  ): RecoveredRelayVerdict | null {
+    if (approvedUnder == null) return "unrecorded_relay";
+    if (this.runtime.getDelegationRelay() == null) return "no_relay_bound";
+    return sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity())
+      ? null
+      : "relay_changed";
   }
 
   /**
@@ -2386,11 +2407,28 @@ function relayColumnsOf(chunk: {
 }
 
 /**
- * Why the drain refused a recovered approval: under another relay than the
- * bound one (`relay_changed`), or from before relay recording with its tool
- * unregistered now, so it cannot be checked (`unrecorded_unregistered`).
+ * Why the drain refused a recovered approval. Every one is the
+ * `relay_changed` verdict (nothing is sent, not a goal failure); each says
+ * only what the drain actually knows.
  */
-type RecoveredRelayVerdict = "relay_changed" | "unrecorded_unregistered";
+type RecoveredRelayVerdict =
+  | "relay_changed"
+  | "no_relay_bound"
+  | "tool_unregistered"
+  | "unrecorded_relay"
+  | "unrecorded_unregistered";
+
+/** The run summary for each refusal, after the tool name. */
+const RECOVERED_RELAY_REFUSAL: Record<RecoveredRelayVerdict, string> = {
+  relay_changed: "was approved under another relay than the one bound now",
+  no_relay_bound: "was approved under a relay, but no relay is bound now",
+  tool_unregistered:
+    "was approved as a relay tool, but its tool is not registered under the current binding",
+  unrecorded_relay:
+    "was approved with no relay recorded, so it cannot be checked against the bound relay",
+  unrecorded_unregistered:
+    "was approved before relay recording and its tool is not registered now, so it cannot be checked against the bound relay",
+};
 
 /** The relay a stored approval was decided under, or null when none was recorded. */
 function recoveredApprovalRelay(item: StoredApprovalItem): ApprovalRelayIdentity | null {

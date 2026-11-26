@@ -17,7 +17,13 @@
  * fakes from `helpers/two-relays.ts`. Ephemeral keys only.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  RELAY_CHANGED_RESULT,
+  createInMemoryStorage,
+  isRelayChangedResult,
+} from "../index";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolDefinition, ToolHandler } from "@motebit/sdk";
@@ -269,6 +275,21 @@ describe("invokeLocalTool with a carried approval for a relay-bound tool", () =>
     expect(r.error).toContain("relay_changed");
     expect(relays.to("B")).toEqual([]);
     expect(relays.tokened()).toEqual([]);
+  });
+
+  it("the refusal is the runtime's own marked refusal; the same text from anywhere else is not", async () => {
+    const runtime = setup();
+    bind(runtime, "B");
+    const r = await runtime.invokeLocalTool("delegate_to_agent", DELEGATE_ARGS, {
+      invocationOrigin: "scheduled",
+      humanApproved: true,
+    });
+    expect(r.error).toBe(RELAY_CHANGED_RESULT.error);
+    expect(isRelayChangedResult(r)).toBe(true);
+    // A handler (an MCP server's error passed through, say) can return the
+    // exact text; it is not the runtime's refusal.
+    expect(isRelayChangedResult({ ok: false, error: RELAY_CHANGED_RESULT.error })).toBe(false);
+    expect(isRelayChangedResult({ ...RELAY_CHANGED_RESULT })).toBe(false);
   });
 
   it("a local tool's carried approval needs no relay and runs as before", async () => {
