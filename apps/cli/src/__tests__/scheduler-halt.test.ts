@@ -424,6 +424,9 @@ describe("halt at the scheduler", () => {
       expires_at: now - 3_600_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
     const m = mockRuntime(db);
     const s = scheduler(db, m);

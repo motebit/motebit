@@ -330,6 +330,9 @@ describe("REPL /approvals command", () => {
       expires_at: now + 3_600_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
 
     await handleSlashCommand("approvals", "", stubRuntime, stubConfig, undefined, repl);
@@ -356,6 +359,9 @@ describe("REPL /approvals command", () => {
       expires_at: now + 3_600_000,
       resolved_at: now,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
 
     await handleSlashCommand("approvals", "", stubRuntime, stubConfig, undefined, repl);

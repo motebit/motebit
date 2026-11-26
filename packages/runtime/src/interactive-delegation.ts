@@ -8,7 +8,7 @@
 
 import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
 import type { ReceiptCarryingResult } from "./turn-delegation-receipts.js";
-import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
+import type { ExecutionReceipt, ToolDefinition, ToolHandler, ToolRegistry } from "@motebit/sdk";
 
 import {
   paymentNoticeChunk,
@@ -22,9 +22,9 @@ import {
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
 import type { ToolCall } from "./turn-principal.js";
 import {
-  RELAY_CHANGED_RESULT,
   acknowledgementOf,
   approvalOutlivedBinding,
+  relayChangedRefusal,
   type RelayBindingSnapshot,
   type RelayBindingSource,
 } from "./relay-binding.js";
@@ -59,6 +59,8 @@ function formatSettlementNote(settlement: DelegationSettlement | undefined): str
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
   has(name: string): boolean;
+  /** Register a tool flagged relay-bound (`SimpleToolRegistry.registerRelayBound`). */
+  registerRelayBound(tool: ToolDefinition, handler: ToolHandler): void;
 }
 
 // === Types ===
@@ -359,7 +361,7 @@ export class InteractiveDelegationManager {
     ): RelayBindingSnapshot | { ok: false; error: string } => {
       const binding = this.deps.getBinding();
       if (approvalOutlivedBinding(call?.approvedRelayGeneration, binding)) {
-        return { ...RELAY_CHANGED_RESULT };
+        return relayChangedRefusal();
       }
       if (binding == null || !binding.tools) return { ...NOT_BOUND_RESULT };
       return binding;
@@ -368,7 +370,7 @@ export class InteractiveDelegationManager {
     // Mark as delegation tool for processStream to emit delegation_start/complete
     this.deps.motebitToolServers.set(TOOL_NAME, "relay");
 
-    this.deps.toolRegistry.register(
+    this.deps.toolRegistry.registerRelayBound(
       {
         name: TOOL_NAME,
         description:
@@ -672,7 +674,7 @@ export class InteractiveDelegationManager {
     // recall is design-shape, never current state.
     const DISCOVER_TOOL = "discover_agents";
     if (!this.deps.toolRegistry.has(DISCOVER_TOOL)) {
-      this.deps.toolRegistry.register(
+      this.deps.toolRegistry.registerRelayBound(
         {
           name: DISCOVER_TOOL,
           description:
@@ -792,7 +794,7 @@ export class InteractiveDelegationManager {
           if (r.status === "delivered") ledger?.resolve(r.taskId);
           return r;
         });
-      this.deps.toolRegistry.register(
+      this.deps.toolRegistry.registerRelayBound(
         {
           name: RETRIEVE_TOOL,
           description:

@@ -6,7 +6,7 @@
 // avoids the circular dependency where a source file would import from the
 // barrel that itself imports from the source files.
 
-import type { TurnResult, TaskRouterConfig } from "@motebit/ai-core";
+import type { ApprovalRelayIdentity, TurnResult, TaskRouterConfig } from "@motebit/ai-core";
 import type {
   ToolRegistry,
   ExecutionReceipt,
@@ -474,6 +474,14 @@ export type StreamChunk =
        * moved.
        */
       prior_settled_this_turn?: number;
+      /**
+       * The relay the approval was decided under, stamped by ai-core at the
+       * pause (`AgenticChunk.approval_request.relay`) and passed through
+       * unchanged. A writer that persists the approval copies it from here.
+       */
+      relay?: ApprovalRelayIdentity | null;
+      /** Whether the paused tool is relay-bound (the registry's flag at the pause). */
+      relay_bound?: boolean;
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | {

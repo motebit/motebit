@@ -23,6 +23,7 @@
  * under and is refused `relay_changed` if it no longer matches.
  */
 import type { TokenAudience } from "@motebit/protocol";
+import type { ApprovalRelayIdentity } from "@motebit/ai-core";
 import { relayPinKey } from "./relay-key-pin.js";
 
 export interface RelayBinding {
@@ -109,6 +110,40 @@ export const RELAY_CHANGED_RESULT = {
 };
 
 /**
+ * The refusals the runtime's own relay checks minted. Module-private: only
+ * {@link relayChangedRefusal} adds to it, so a result carrying the same text
+ * (an MCP server's error passed through, say) or a copy of a minted refusal
+ * is never mistaken for one.
+ */
+const MINTED_REFUSALS = new WeakSet<object>();
+
+/**
+ * A fresh `relay_changed` refusal ({@link RELAY_CHANGED_RESULT}) marked as
+ * the runtime's own. Returned by `invokeLocalTool`'s carried-approval check
+ * and by the delegation handlers' generation check.
+ */
+export function relayChangedRefusal(): { ok: false; error: string } {
+  const refusal = { ...RELAY_CHANGED_RESULT };
+  MINTED_REFUSALS.add(refusal);
+  return refusal;
+}
+
+/**
+ * True only for a refusal {@link relayChangedRefusal} minted — by object
+ * identity, never by its text. The mark cannot be produced from a result's
+ * text or by copying one. Only the runtime's own refusal paths mint it
+ * (`invokeLocalTool`'s carried-approval check and the generation check of
+ * its three relay tools, which runs before any I/O), so only code running in
+ * this process under a relay-bound tool name could pass a minted refusal off
+ * as its own — e.g. a handler `replace`d under such a name that calls
+ * `invokeLocalTool` itself. No production code replaces a relay-bound
+ * handler, and `merge()` entries never carry the relay-bound flag at all.
+ */
+export function isRelayChangedResult(result: object): boolean {
+  return MINTED_REFUSALS.has(result);
+}
+
+/**
  * True when a call approved under generation `approved` must not run under
  * `current` (a different generation, or no binding at all).
  */
@@ -118,4 +153,31 @@ export function approvalOutlivedBinding(
 ): boolean {
   if (approved == null) return false;
   return current == null || current.generation !== approved;
+}
+
+/**
+ * The relay identity an approval is decided under (`ApprovalRelayIdentity`):
+ * the binding's pin key and its pinned public key, or null while unbound or
+ * when the URL cannot be pinned (`relayPinKey` is null). Never a raw URL, so
+ * two unpinnable URLs can never compare equal.
+ */
+export function relayIdentityOf(
+  binding: RelayBindingSnapshot | null,
+): ApprovalRelayIdentity | null {
+  if (binding == null) return null;
+  const pinKey = relayPinKey(binding.syncUrl);
+  if (pinKey == null) return null;
+  return { pinKey, publicKey: binding.relayPublicKey ?? null };
+}
+
+/**
+ * True only when both identities are present and name the same relay: the
+ * same pin key, and the same pinned public key or both null.
+ */
+export function sameRelayIdentity(
+  a: ApprovalRelayIdentity | null | undefined,
+  b: ApprovalRelayIdentity | null | undefined,
+): boolean {
+  if (a == null || b == null) return false;
+  return a.pinKey === b.pinKey && (a.publicKey ?? null) === (b.publicKey ?? null);
 }

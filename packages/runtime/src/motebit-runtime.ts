@@ -232,6 +232,7 @@ import type {
   TurnOptions,
   ReflectionResult,
   TaskType,
+  ApprovalRelayIdentity,
 } from "@motebit/ai-core";
 import { OWNER_ACT, TurnDelegationReceipts } from "./turn-delegation-receipts.js";
 import { TurnPrincipal, foreignLocalOnlyRefusal, OWNER_CALL } from "./turn-principal.js";
@@ -273,8 +274,12 @@ import {
 } from "./paid-intent-ledger.js";
 import {
   acknowledgementOf,
+  relayChangedRefusal,
+  relayIdentityOf,
   sameRelay,
+  sameRelayIdentity,
   startsNewGeneration,
+  RELAY_CHANGED_RESULT,
   type RelayBinding,
   type RelayBindingSnapshot,
 } from "./relay-binding.js";
@@ -2067,6 +2072,16 @@ export class MotebitRuntime {
        * unknown" and holds the goal instead of repeating the call.
        */
       runId?: string;
+      /**
+       * The relay the carried approval (`humanApproved`) was decided under,
+       * as recorded with it. Required for a relay-bound tool: a
+       * `humanApproved` call to one without it, or with a relay that is not
+       * the bound one, is refused `relay_changed` before the tool runs.
+       * The runtime converts it into the binding generation itself — a
+       * caller never supplies a `ToolCall` (it would carry the caller's
+       * own principal and money capability).
+       */
+      approvedUnderRelay?: ApprovalRelayIdentity;
     } = {},
   ): Promise<ToolResult> {
     const invocationId =
@@ -2108,6 +2123,21 @@ export class MotebitRuntime {
       // so the gate cannot risk-assess it. Fail closed — it must not run.
       return refuseLocalCall(`Tool "${name}" is not available`);
     }
+    // A carried approval for a relay-bound tool runs only under the relay it
+    // was approved under. The comparison and the generation it converts to
+    // are read in ONE synchronous step, and nothing below awaits before
+    // `execute`; the handler compares the generation with its own snapshot,
+    // so a rebind that lands inside `execute` is refused there.
+    let approvedCall: ToolCall | undefined;
+    if (options.humanApproved === true && this.toolRegistry.isRelayBound(name)) {
+      if (!sameRelayIdentity(options.approvedUnderRelay, relayIdentityOf(this._relayBinding))) {
+        // The receipt is signed `denied`; the caller gets the runtime's own
+        // marked refusal (`isRelayChangedResult`), which no handler can forge.
+        await refuseLocalCall(RELAY_CHANGED_RESULT.error);
+        return relayChangedRefusal();
+      }
+      approvedCall = { ...OWNER_CALL, approvedRelayGeneration: this._relayGeneration };
+    }
     const turnCtx = this.policy.createTurnContext(options.runId);
     const decision = this.policy.validate(toolDef, args, turnCtx);
     if (!decision.allowed) {
@@ -2135,7 +2165,8 @@ export class MotebitRuntime {
 
     let result: ToolResult;
     try {
-      result = await this.toolRegistry.execute(name, args);
+      // OWNER_CALL is the registry's own default for a call that names none.
+      result = await this.toolRegistry.execute(name, args, approvedCall ?? OWNER_CALL);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       result = { ok: false, error: msg };
@@ -5335,6 +5366,11 @@ export class MotebitRuntime {
         onPixelOmissionEmitted: (reason) => {
           this._lastPixelOmissionReason = reason;
         },
+        // The relay stamp on every `approval_request` (turns and plan
+        // steps): which relay the approval is decided under, and whether
+        // the paused tool is relay-bound by the registry's own flag.
+        relayIdentity: () => this.getRelayIdentity(),
+        isRelayBoundTool: (name) => this.toolRegistry.isRelayBound(name),
       };
     }
   }
@@ -6663,6 +6699,25 @@ export class MotebitRuntime {
       this._relayGeneration++;
     }
     this.interactiveDelegation.unregister();
+  }
+
+  /**
+   * The relay identity an approval decided now is decided under
+   * (`relayIdentityOf`): the bound relay's pin key and pinned public key,
+   * or null while unbound or when its URL cannot be pinned. Read-only.
+   */
+  getRelayIdentity(): ApprovalRelayIdentity | null {
+    return relayIdentityOf(this._relayBinding);
+  }
+
+  /**
+   * How the tool registry classifies `name` for a carried approval:
+   * `relay_bound` (registered with the registry's relay-bound flag),
+   * `local` (registered without it) or `unregistered`. Read-only.
+   */
+  relayBoundToolStatus(name: string): "relay_bound" | "local" | "unregistered" {
+    if (!this.toolRegistry.has(name)) return "unregistered";
+    return this.toolRegistry.isRelayBound(name) ? "relay_bound" : "local";
   }
 
   /**

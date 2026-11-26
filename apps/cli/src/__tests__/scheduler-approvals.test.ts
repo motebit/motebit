@@ -282,6 +282,9 @@ describe("GoalScheduler — approval lifecycle", () => {
       expires_at: now - 3_600_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
 
     const count = moteDb.approvalStore.expireStale(now);
@@ -307,6 +310,9 @@ describe("GoalScheduler — approval lifecycle", () => {
       expires_at: now + 3_600_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
 
     const item = moteDb.approvalStore.get("hash-test");
@@ -455,6 +461,9 @@ describe("GoalScheduler — pending approvals survive a restart", () => {
         expires_at: now + 3_600_000,
         resolved_at: null,
         denied_reason: null,
+        relay_pin_key: null,
+        relay_public_key: null,
+        relay_bound: false,
       });
     }
 
@@ -491,6 +500,9 @@ describe("GoalScheduler — pending approvals survive a restart", () => {
       expires_at: now + 3_600_000,
       resolved_at: now - 60_000,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
     const { runtime } = createMockRuntime();
     const scheduler = new GoalScheduler(

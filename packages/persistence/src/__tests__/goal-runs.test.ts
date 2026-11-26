@@ -77,6 +77,9 @@ describe("SqliteGoalRunStore — the durable run ledger (migration #43)", () => 
       expires_at: now + 1000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
       args_json: JSON.stringify({ path: "/tmp/x", content: "y".repeat(1000) }),
     });
     const item = moteDb.approvalStore.get("ap-1")!;
@@ -98,6 +101,9 @@ describe("SqliteGoalRunStore — the durable run ledger (migration #43)", () => 
       expires_at: now + 1000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
     expect(moteDb.approvalStore.get("old")!.args_json).toBeNull();
   });
